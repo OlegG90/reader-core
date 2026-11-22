@@ -1,0 +1,23 @@
+{
+  "name": "reader-core",
+  "version": "0.1.0",
+  "description": "The reading part shared by Simple Reader and Book Reader: a foliate-js book view (EPUB, FB2), its appearance and page layout.",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./foliate-js/*": "./src/vendor/foliate-js/*"
+  },
+  "files": ["src", "!src/**/*.test.ts", "LICENSE", "README.md"],
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "jsdom": "^30.1.1",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.1"
+  }
+}
