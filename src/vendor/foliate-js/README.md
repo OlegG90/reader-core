@@ -9,4 +9,5 @@ Copied unmodified, except:
   features are out of scope (`vendor/pdfjs` is not vendored).
 - `reader.js`, `reader.html`, `opds.js`, `dict.js`, `ui/menu.js`, tests and build files are not vendored.
 
-To update, copy the same files from a newer upstream commit and update the commit above.
+To update, copy the same files from a newer upstream commit and update the commit above, and the `foliate-js`
+field in reader-core's `package.json` (apps show it in `--version`).
