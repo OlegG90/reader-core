@@ -4,6 +4,7 @@
  * foliate-js; the rest is what it needs and what apps style it with.
  */
 export { BookView, type Book, type BookSource, type BookStyle, type Relocation, type TocItem } from './book-view'
+export type { ChapterPage } from './pages'
 export * from './appearance'
 export type { Flow } from './layout'
 export { el, suppressContextMenu } from './dom'

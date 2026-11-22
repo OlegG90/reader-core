@@ -14,7 +14,7 @@ What differs per app stays in the app: key bindings, settings panels, the librar
 The package is TypeScript source, compiled by the app's own Vite / tsc (`moduleResolution: "bundler"`). Apps depend on a tag:
 
 ```json
-"dependencies": { "reader-core": "git+https://github.com/OlegG90/reader-core.git#v0.2.0" }
+"dependencies": { "reader-core": "git+https://github.com/OlegG90/reader-core.git#v0.3.0" }
 ```
 
 An app also needs:
