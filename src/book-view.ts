@@ -91,7 +91,7 @@ const NOTE_CSS = `
   }
 `
 const NOTE_MARGIN_PX = 16
-/** The pop-up's border, which box-sizing takes out of its height (see style.css). */
+/** The pop-up's border, which box-sizing takes out of its height (see book-view.css). */
 const NOTE_BORDER_PX = 2
 
 /** Share of the window width that turns pages when clicked. */
@@ -158,6 +158,9 @@ export class BookView {
     private footnoteHost: HTMLElement,
     private events: BookViewEvents,
   ) {
+    // book-view.css lays these out.
+    host.classList.add('book-view')
+    footnoteHost.classList.add('book-view-footnote')
     host.append(this.view)
   }
 
@@ -207,7 +210,7 @@ export class BookView {
   /** Lays the text across the window: see columnLayout(). */
   #fillWindow() {
     const renderer = this.view.renderer
-    // The reader fills the window (#stage), so the window is the paginator's box.
+    // The book fills the window (its host does, up to safe areas), so the window is the paginator's box.
     const viewport = { width: innerWidth, height: innerHeight }
     const current = parseFloat(renderer.getAttribute('max-inline-size') ?? '') || undefined
     const { columns, maxInlineSize } = columnLayout(viewport, this.#lineWidth, this.flow, current)
@@ -281,7 +284,11 @@ export class BookView {
     })
     // The page margins lie outside the book's iframes.
     view.addEventListener('wheel', e => this.#onWheel(e), { passive: true })
-    view.addEventListener('pointerdown', e => this.#onPress(e))
+    view.addEventListener('pointerdown', e => {
+      this.#onPress(e)
+      this.#touchDown(e, { x: e.clientX, y: e.clientY })
+    })
+    view.addEventListener('pointerup', e => this.#touchUp(e, { x: e.clientX, y: e.clientY }))
     view.addEventListener('click', e => {
       if (this.#lastPressWasTouch || this.#consumePanelClose()) return
       this.#onEdgeClick(e.clientX)
@@ -389,17 +396,12 @@ export class BookView {
     doc.addEventListener('pointermove', ev => ev.pointerType === 'mouse' && this.events.pointer(toWindow(ev).y))
     doc.addEventListener('pointerdown', ev => {
       this.#onPress(ev)
-      if (ev.pointerType === 'touch') this.#touchStart = { ...toWindow(ev), time: ev.timeStamp }
+      this.#touchDown(ev, toWindow(ev))
     })
-    doc.addEventListener('pointerup', ev => {
-      const start = this.#touchStart
-      this.#touchStart = null
-      if (ev.pointerType !== 'touch' || !start || !isTap(start, { ...toWindow(ev), time: ev.timeStamp })) return
-      if (this.#consumePanelClose() || (ev.target as Element).closest?.('a[href]')) return
-      if (doc.getSelection()?.toString()) return
-      this.hideFootnote()
-      this.#onTap(toWindow(ev).x)
-    })
+    // A tap on a link follows it, and one that ends a selection keeps it.
+    doc.addEventListener('pointerup', ev =>
+      this.#touchUp(ev, toWindow(ev), !!(ev.target as Element).closest?.('a[href]') || !!doc.getSelection()?.toString()),
+    )
     suppressContextMenu(doc)
     doc.addEventListener('click', ev => {
       if (this.#lastPressWasTouch || this.#consumePanelClose()) return
@@ -408,6 +410,21 @@ export class BookView {
       this.hideFootnote()
       this.#onEdgeClick(toWindow(ev).x)
     })
+  }
+
+  /** A finger went down at `point` (window coordinates): maybe the start of a tap. */
+  #touchDown(e: PointerEvent, point: { x: number; y: number }) {
+    this.#touchStart = e.pointerType === 'touch' ? { ...point, time: e.timeStamp } : null
+  }
+
+  /** A finger came up: a tap (not one that closed a panel, nor an `ignored` one) acts. */
+  #touchUp(e: PointerEvent, point: { x: number; y: number }, ignored = false) {
+    const start = this.#touchStart
+    this.#touchStart = null
+    if (e.pointerType !== 'touch' || !start || !isTap(start, { ...point, time: e.timeStamp })) return
+    if (this.#consumePanelClose() || ignored) return
+    this.hideFootnote()
+    this.#onTap(point.x)
   }
 
   /** A finger's tap: the sides turn pages (paginated), the middle shows the menu. */
