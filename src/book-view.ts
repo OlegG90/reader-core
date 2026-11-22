@@ -153,25 +153,20 @@ export class BookView {
     this.#justClosedPanel = this.events.pointerDown()
   }
 
+  /** The footnote pop-up (laid out by book-view.css), shown over the page. */
+  readonly #note = Object.assign(document.createElement('aside'), { className: 'book-view-footnote', hidden: true })
+
   private constructor(
     host: HTMLElement,
-    private footnoteHost: HTMLElement,
     private events: BookViewEvents,
   ) {
-    // book-view.css lays these out.
     host.classList.add('book-view')
-    footnoteHost.classList.add('book-view-footnote')
-    host.append(this.view)
+    host.append(this.view, this.#note)
   }
 
-  static async open(
-    host: HTMLElement,
-    footnoteHost: HTMLElement,
-    source: BookSource,
-    options: OpenOptions,
-    events: BookViewEvents,
-  ): Promise<BookView> {
-    const book = new BookView(host, footnoteHost, events)
+  /** Opens `source` in `host`, which the book fills (see book-view.css). */
+  static async open(host: HTMLElement, source: BookSource, options: OpenOptions, events: BookViewEvents): Promise<BookView> {
+    const book = new BookView(host, events)
     try {
       await book.#open(source, options)
     } catch (e) {
@@ -249,9 +244,14 @@ export class BookView {
     return this.view.renderer.goTo({ index, anchor: () => anchor })
   }
 
+  /** A footnote is shown. */
+  get footnoteOpen() {
+    return !this.#note.hidden
+  }
+
   hideFootnote() {
-    this.footnoteHost.hidden = true
-    this.footnoteHost.replaceChildren()
+    this.#note.hidden = true
+    this.#note.replaceChildren()
   }
 
   destroy() {
@@ -260,6 +260,7 @@ export class BookView {
     this.view.close()
     this.view.book?.destroy?.()
     this.view.remove()
+    this.#note.remove()
   }
 
   async #open(source: BookSource, { flow, lastLocation, style }: OpenOptions) {
@@ -284,11 +285,7 @@ export class BookView {
     })
     // The page margins lie outside the book's iframes.
     view.addEventListener('wheel', e => this.#onWheel(e), { passive: true })
-    view.addEventListener('pointerdown', e => {
-      this.#onPress(e)
-      this.#touchDown(e, { x: e.clientX, y: e.clientY })
-    })
-    view.addEventListener('pointerup', e => this.#touchUp(e, { x: e.clientX, y: e.clientY }))
+    this.#attachPresses(view, e => ({ x: e.clientX, y: e.clientY }))
     view.addEventListener('click', e => {
       if (this.#lastPressWasTouch || this.#consumePanelClose()) return
       this.#onEdgeClick(e.clientX)
@@ -363,20 +360,20 @@ export class BookView {
       // The renderer re-lays the note out (and relocates) whenever it reflows;
       // fit the pop-up to it. CSS max-height caps long notes, which then scroll.
       note.addEventListener('relocate', () => {
-        this.footnoteHost.style.height = `${Math.ceil(note.renderer.viewSize) + NOTE_BORDER_PX}px`
+        this.#note.style.height = `${Math.ceil(note.renderer.viewSize) + NOTE_BORDER_PX}px`
       })
       note.renderer.setAttribute('flow', 'scrolled')
       note.renderer.setAttribute('margin', `${NOTE_MARGIN_PX}px`)
       note.renderer.setAttribute('gap', '6%')
       note.renderer.setStyles?.(this.#css + NOTE_CSS)
       // Lay the note out off-screen so it has a size before it is shown.
-      this.footnoteHost.style.visibility = 'hidden'
-      this.footnoteHost.style.height = ''
-      this.footnoteHost.hidden = false
-      this.footnoteHost.replaceChildren(note)
+      this.#note.style.visibility = 'hidden'
+      this.#note.style.height = ''
+      this.#note.hidden = false
+      this.#note.replaceChildren(note)
     })
     this.#footnotes.addEventListener('render', () => {
-      this.footnoteHost.style.visibility = ''
+      this.#note.style.visibility = ''
     })
   }
 
@@ -394,37 +391,45 @@ export class BookView {
     doc.addEventListener('wheel', ev => this.#onWheel(ev), { passive: true })
     // Mouse only: a tap's emulated mouse events would hide the menu it just showed.
     doc.addEventListener('pointermove', ev => ev.pointerType === 'mouse' && this.events.pointer(toWindow(ev).y))
-    doc.addEventListener('pointerdown', ev => {
-      this.#onPress(ev)
-      this.#touchDown(ev, toWindow(ev))
-    })
-    // A tap on a link follows it, and one that ends a selection keeps it.
-    doc.addEventListener('pointerup', ev =>
-      this.#touchUp(ev, toWindow(ev), !!(ev.target as Element).closest?.('a[href]') || !!doc.getSelection()?.toString()),
-    )
+    // A press on a link follows it, and one that ends a selection keeps it.
+    const onLinkOrSelection = (ev: MouseEvent) => !!(ev.target as Element).closest?.('a[href]') || !!doc.getSelection()?.toString()
+    this.#attachPresses(doc, toWindow, onLinkOrSelection)
     suppressContextMenu(doc)
     doc.addEventListener('click', ev => {
       if (this.#lastPressWasTouch || this.#consumePanelClose()) return
-      if (ev.defaultPrevented || (ev.target as Element).closest?.('a[href]')) return
-      if (doc.getSelection()?.toString()) return
+      if (ev.defaultPrevented || onLinkOrSelection(ev)) return
       this.hideFootnote()
       this.#onEdgeClick(toWindow(ev).x)
     })
   }
 
-  /** A finger went down at `point` (window coordinates): maybe the start of a tap. */
-  #touchDown(e: PointerEvent, point: { x: number; y: number }) {
-    this.#touchStart = e.pointerType === 'touch' ? { ...point, time: e.timeStamp } : null
-  }
-
-  /** A finger came up: a tap (not one that closed a panel, nor an `ignored` one) acts. */
-  #touchUp(e: PointerEvent, point: { x: number; y: number }, ignored = false) {
-    const start = this.#touchStart
-    this.#touchStart = null
-    if (e.pointerType !== 'touch' || !start || !isTap(start, { ...point, time: e.timeStamp })) return
-    if (this.#consumePanelClose() || ignored) return
-    this.hideFootnote()
-    this.#onTap(point.x)
+  /**
+   * Presses on the page margins (`target` = the view) or on a page (`target`
+   * = its document; `toWindow` maps its coordinates): forwarded to the app,
+   * and a finger's tap (not one that closed a panel, nor an `ignored` one)
+   * turns the page or shows the menu.
+   */
+  #attachPresses(
+    target: HTMLElement | Document,
+    toWindow: (e: MouseEvent) => { x: number; y: number },
+    ignored: (e: MouseEvent) => boolean = () => false,
+  ) {
+    // (A view and a document type their listeners apart; both get PointerEvents here.)
+    target.addEventListener('pointerdown', ev => {
+      const e = ev as PointerEvent
+      this.#onPress(e)
+      this.#touchStart = e.pointerType === 'touch' ? { ...toWindow(e), time: e.timeStamp } : null
+    })
+    target.addEventListener('pointerup', ev => {
+      const e = ev as PointerEvent
+      const start = this.#touchStart
+      this.#touchStart = null
+      if (e.pointerType !== 'touch' || !start) return
+      const end = { ...toWindow(e), time: e.timeStamp }
+      if (!isTap(start, end) || this.#consumePanelClose() || ignored(e)) return
+      this.hideFootnote()
+      this.#onTap(end.x)
+    })
   }
 
   /** A finger's tap: the sides turn pages (paginated), the middle shows the menu. */

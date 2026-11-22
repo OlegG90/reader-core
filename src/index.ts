@@ -5,7 +5,5 @@
  */
 export { BookView, type Book, type BookSource, type BookStyle, type Relocation, type TocItem } from './book-view'
 export * from './appearance'
-export * from './layout'
-export * from './pages'
-export * from './touch'
-export * from './dom'
+export type { Flow } from './layout'
+export { el, suppressContextMenu } from './dom'

@@ -1,6 +1,6 @@
 /*
- * BookView's own layout. BookView marks its host `.book-view` and the
- * footnote pop-up's host `.book-view-footnote`; the app places the host
+ * BookView's own layout. BookView marks its host `.book-view` and adds the
+ * footnote pop-up (`.book-view-footnote`) to it; the app places the host
  * (it fills the window, up to safe areas) and gives the colours:
  * --muted (page numbers), --panel, --line and --shadow (the pop-up).
  */

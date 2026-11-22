@@ -3,6 +3,7 @@
   "version": "0.2.0",
   "description": "The reading part shared by Simple Reader and Book Reader: a foliate-js book view (EPUB, FB2), its appearance and page layout.",
   "license": "MIT",
+  "foliate-js": "78914ae (2026-05-01)",
   "private": true,
   "type": "module",
   "exports": {

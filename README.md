@@ -5,7 +5,7 @@ The reading part shared by [Simple Reader](https://github.com/OlegG90/simple-rea
 - **`BookView`** (`src/book-view.ts`, laid out by `src/book-view.css`): shows a book with [foliate-js](https://github.com/johnfactotum/foliate-js) — an EPUB or FB2 file, or a book object an app builds itself (Simple Reader's Markdown). Paginated or scrolled, page numbers under the columns, footnotes in a pop-up, mouse wheel, clicks on the page edges and touch (taps on the sides turn pages, the middle shows the app's menu).
 - **Appearance** (`appearance.ts`): themes, fonts, sizes, line spacing and length, and the CSS that applies them to the book.
 - **Layout** (`layout.ts`, `pages.ts`): columns and page labels; **touch** (`touch.ts`): taps and tap zones; **dom** (`dom.ts`): small DOM helpers.
-- **foliate-js**, vendored and slimmed (see `src/vendor/foliate-js/README.md`), importable as `reader-core/foliate-js/<file>.js`.
+- **foliate-js**, vendored and slimmed (see `src/vendor/foliate-js/README.md`), importable as `reader-core/foliate-js/<file>.js`; its upstream commit is the `foliate-js` field in `package.json`.
 
 What differs per app stays in the app: key bindings, settings panels, the library, Markdown, the Tauri backend.
 
