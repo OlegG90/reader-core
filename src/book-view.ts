@@ -1,6 +1,6 @@
 import { suppressContextMenu } from './dom'
 import { PAGE_GAP, columnLayout, type Flow } from './layout'
-import { pageLabels } from './pages'
+import { chapterPage, pageLabels, type ChapterPage } from './pages'
 import { isTap, tapZone, type Touch } from './touch'
 import './vendor/foliate-js/view.js'
 import { FootnoteHandler } from './vendor/foliate-js/footnotes.js'
@@ -61,6 +61,9 @@ interface FoliateView extends HTMLElement {
   goRight(): Promise<void>
   next(distance?: number): Promise<void>
   prev(distance?: number): Promise<void>
+  /** Where each section (spine item) starts, as a share of the book. */
+  getSectionFractions(): number[]
+  resolveNavigation(target: string): { index: number } | undefined
 }
 
 interface BookViewEvents {
@@ -304,14 +307,37 @@ export class BookView {
    * Vertical text gets none: there the bottom cells don't match its columns.
    */
   #showPageNumbers() {
+    this.#chapterPage = null
     const renderer = this.view.renderer
     const { feet, page, pages } = renderer
     if (!feet) return
     // The paginator lays vertical text out in rows ('height'); its bottom cells aren't columns.
     if (renderer.sideProp === 'height') return feet.forEach(foot => (foot.textContent = ''))
-    const columns = feet.length
-    const labels = pageLabels({ page, pages, columns, textColumns: this.#textColumns(columns) })
+    const layout = { page, pages, columns: feet.length, textColumns: this.#textColumns(feet.length) }
+    this.#chapterPage = chapterPage(layout)
+    const labels = pageLabels(layout)
     feet.forEach((foot, i) => (foot.textContent = labels[i]))
+  }
+
+  #chapterPage: ChapterPage | null = null
+
+  /**
+   * The page within the chapter (paginated, horizontal text), as of the last
+   * relocate: the one the bottom margin shows under the first column. Null
+   * when scrolled, for vertical text, or on a blank edge screen.
+   */
+  get chapterPage(): ChapterPage | null {
+    return this.#chapterPage
+  }
+
+  /** Where each top-level chapter of the contents starts, as a share of the book (for ticks on a progress bar). */
+  chapterStarts(): number[] {
+    const fractions = this.view.getSectionFractions()
+    const starts = this.toc
+      .map(item => (item.href ? this.view.resolveNavigation(item.href)?.index : undefined))
+      .map(index => (index == null ? undefined : fractions[index]))
+      .filter((f): f is number => f != null && f > 0 && f < 1)
+    return [...new Set(starts)].sort((a, b) => a - b)
   }
 
   /** The last measurement, kept until the chapter or its layout changes. */
