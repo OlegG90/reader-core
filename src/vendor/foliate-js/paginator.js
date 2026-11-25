@@ -372,6 +372,11 @@ class View {
                 : this.#rtl ? rootRect.right - contentRect.right : contentRect.left - rootRect.left
             const contentSize = contentStart + contentRect[side]
             const pageCount = Math.ceil(contentSize / this.#size)
+            // A fresh iframe can measure zeros before its first layout; sizing
+            // from that collapses the frame and makes the next measurement
+            // pathologically slow on huge sections. Skip the degenerate write;
+            // the resize observer and font-ready callbacks re-measure later.
+            if (!pageCount) return
             const expandedSize = pageCount * this.#size
             this.#element.style.padding = '0'
             this.#iframe.style[side] = `${expandedSize}px`
