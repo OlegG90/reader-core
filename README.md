@@ -14,7 +14,7 @@ What differs per app stays in the app: key bindings, settings panels, the librar
 The package is TypeScript source, compiled by the app's own Vite / tsc (`moduleResolution: "bundler"`). Apps depend on a tag:
 
 ```json
-"dependencies": { "reader-core": "git+https://github.com/OlegG90/reader-core.git#v0.3.0" }
+"dependencies": { "reader-core": "git+https://github.com/OlegG90/reader-core.git#v0.4.0" }
 ```
 
 An app also needs:
@@ -28,6 +28,12 @@ import { BookView, bookCss, type Relocation } from 'reader-core'
 import 'reader-core/book-view.css'
 import { createTOCView } from 'reader-core/foliate-js/ui/tree.js'
 ```
+
+FB2 sections longer than 80k characters are cut into parts (from 0.4.0), so a book that is one long chapter
+opens fast. In such a book the CFIs are tagged (`/6/N[fb2-parts-80000]!…`); a CFI saved before, without the
+tag, still resolves (`view.goTo`), and `book.upgradeCFI(cfi)` rewrites it, so an app can move the CFIs it stores
+(bookmarks, positions) once. A reader-core older than 0.4.0 reads a tagged CFI as the wrong section, so bump
+every app that shares positions together.
 
 A change here is a new tag, then a bump in each app.
 
