@@ -244,26 +244,30 @@ const IMAGE_WEIGHT = 2_000
 const continuedAttr = 'data-foliate-continued'
 // Tags the spine step of every CFI in a book whose sections were cut, so that
 // a CFI saved before they were (it has no tag) can be told apart and moved.
-export const PARTS_TAG = 'fb2-parts'
+// The tag names the limit, as another limit would cut the book differently.
+const partsTag = limit => `fb2-parts-${limit}`
 
+/** How much a node weighs toward a section's limit: its text, and its images. */
 const weigh = node => (node.textContent?.length ?? 0)
     + (node.nodeType === 1 ? (node.localName === 'img' ? 1
         : node.getElementsByTagName('img').length) * IMAGE_WEIGHT : 0)
+
+/** The spine part of a tagged CFI that points at section `index`. */
+const taggedSpine = (index, tag) => [{ index: 6 }, { index: (index + 1) * 2, id: tag }]
 
 /**
  * Cuts a converted section into parts of at most `limit` (where blocks allow),
  * at the boundaries of its child nodes, descending into nested sections that
  * are too long themselves. Each part is a shallow copy of `el` holding a run
  * of the original children, so styles keyed on the nesting still apply; only
- * the first part keeps the section's id. Returns null when the section fits.
- *
- * The plan it returns remembers where each child went, to move old CFIs:
- * `parts` lists `{ el, pieces }`, a piece being the child's number among the
- * section's elements (`n`, 0 for text) and, for a nested section that was cut
- * too, which of its parts (`sub`); `nested` maps `n` to that section's plan.
+ * the first part keeps the section's id. Returns null when the section fits,
+ * else the parts, each with a note of which children it holds, so that old
+ * CFIs can be moved onto them (see moveSteps).
  */
 const cutSection = (el, limit) => {
     if (weigh(el) <= limit) return null
+    // a piece is a child: element number `n` (or `sub`, its part, when it is
+    // a nested section that was cut too), or text after element number `after`
     const groups = [], nested = new Map()
     let group = [], size = 0
     const flush = () => {
@@ -272,17 +276,21 @@ const cutSection = (el, limit) => {
     }
     let n = 0
     for (const child of Array.from(el.childNodes)) {
-        const isElement = child.nodeType === 1
-        if (isElement) n++
         const weight = weigh(child)
+        if (child.nodeType !== 1) {
+            group.push({ node: child, after: n })
+            size += weight
+            continue
+        }
+        n++
         // a nested section too long itself is cut first; its first part may
         // join the blocks before it, its last part the blocks after it
-        const plan = isElement && weight > limit && child.localName === 'section'
+        const plan = weight > limit && child.localName === 'section'
             ? cutSection(child, limit) : null
         if (plan) nested.set(n, plan)
         const pieces = plan
             ? plan.parts.map(({ el }, sub) => ({ node: el, n, sub, weight: weigh(el) }))
-            : [{ node: child, n: isElement ? n : 0, sub: 0, weight }]
+            : [{ node: child, n, sub: 0, weight }]
         for (const piece of pieces) {
             if (size && size + piece.weight > limit) flush()
             group.push(piece)
@@ -299,7 +307,7 @@ const cutSection = (el, limit) => {
                 part.setAttribute(continuedAttr, '')
             }
             part.append(...pieces.map(piece => piece.node))
-            return { el: part, pieces: pieces.map(({ n, sub }) => ({ n, sub })) }
+            return { el: part, pieces }
         }),
     }
 }
@@ -312,28 +320,35 @@ const cutSection = (el, limit) => {
 const moveSteps = (plan, steps) => {
     const [step, ...rest] = steps
     if (!step) return [0, []]
-    // an even index is the (index / 2)th element; an odd one is the text
-    // after the ((index - 1) / 2)th element, or before the first one
-    const odd = step.index % 2 === 1
-    const n = odd ? Math.max((step.index - 1) / 2, 1) : step.index / 2
-    const nested = plan.nested.get(n)
+    // an even index is element number index / 2; an odd one is the text after
+    // element number (index - 1) / 2 (0: before the first element)
+    if (step.index % 2) {
+        const after = (step.index - 1) / 2
+        for (const [i, { pieces }] of plan.parts.entries()) {
+            let elements = 0
+            for (const piece of pieces) {
+                if (piece.n) elements++
+                else if (piece.after === after)
+                    return [i, [{ ...step, index: elements * 2 + 1 }]]
+            }
+        }
+        // no text there (a CFI may name an empty gap): take the element
+        return moveSteps(plan, [{ index: Math.max(after, 1) * 2 }])
+    }
+    const n = step.index / 2
     let sub = 0, inner = rest
-    if (odd) {
-        // text after a cut section follows its last part
-        if (nested && step.index > 1) sub = nested.parts.length - 1
-    } else if (nested) {
-        const moved = moveSteps(nested, rest)
+    if (plan.nested.has(n)) {
+        const moved = moveSteps(plan.nested.get(n), rest)
         if (!moved) return null
         ;[sub, inner] = moved
     }
     for (const [i, { pieces }] of plan.parts.entries()) {
-        let at = 0
+        let elements = 0
         for (const piece of pieces) {
             if (!piece.n) continue
-            at++
-            if (piece.n !== n || piece.sub !== sub) continue
-            const index = !odd ? at * 2 : step.index === 1 ? at * 2 - 1 : at * 2 + 1
-            return [i, [{ ...step, index }, ...inner]]
+            elements++
+            if (piece.n === n && piece.sub === sub)
+                return [i, [{ ...step, index: elements * 2 }, ...inner]]
         }
     }
     return null
@@ -342,9 +357,10 @@ const moveSteps = (plan, steps) => {
 /**
  * Moves a CFI saved before the book's sections were cut (it has no tag) onto
  * the part that now holds its place, collapsed to its start. `cuts` says,
- * for each section as it was, where its parts start and how it was cut.
+ * for each section as it was, where its parts start and how it was cut. A CFI
+ * that is tagged already, or that can't be read, is returned as it is.
  */
-const upgradeCFI = (cuts, cfi) => {
+const upgradeCFI = (cuts, tag, cfi) => {
     let parsed
     try {
         parsed = CFI.parse(CFI.collapse(cfi))
@@ -352,7 +368,7 @@ const upgradeCFI = (cuts, cfi) => {
         return cfi
     }
     const [spine, steps = []] = parsed
-    if (!spine?.length || spine.at(-1).id === PARTS_TAG) return cfi
+    if (!spine?.length || spine.at(-1).id?.startsWith(partsTag(''))) return cfi
     const cut = cuts[CFI.fake.toIndex(spine)]
     if (!cut) return cfi
     let part = 0, moved = steps
@@ -362,11 +378,12 @@ const upgradeCFI = (cuts, cfi) => {
         if (found) [part, moved] = [found[0], [...steps.slice(0, 2), ...found[1]]]
         else moved = steps.slice(0, 2)
     }
-    const step = { index: (cut.first + part + 1) * 2, id: PARTS_TAG }
-    return CFI.toString(moved.length ? [[{ index: 6 }, step], moved] : [[{ index: 6 }, step]])
+    const newSpine = taggedSpine(cut.first + part, tag)
+    return CFI.toString(moved.length ? [newSpine, moved] : [newSpine])
 }
 
-// `sectionLimit` overrides SECTION_LIMIT (Infinity keeps every section whole)
+// `sectionLimit` overrides SECTION_LIMIT for tests (Infinity keeps every
+// section whole, as before sections were cut)
 export const makeFB2 = async (blob, { sectionLimit = SECTION_LIMIT } = {}) => {
     const book = {}
     const doc = await parseXML(blob)
@@ -419,6 +436,7 @@ export const makeFB2 = async (blob, { sectionLimit = SECTION_LIMIT } = {}) => {
     })
 
     const urls = []
+    /** Makes a section of the book from a converted element. */
     const makeSection = (el, linear) => {
         const str = template(el.outerHTML)
         const blob = new Blob([str], { type: MIME.XHTML })
@@ -436,58 +454,57 @@ export const makeFB2 = async (blob, { sectionLimit = SECTION_LIMIT } = {}) => {
         }
     }
 
-    // a TOC item for each section in the first body, and one for each
-    // additional body; a long one is cut into several sections (see cutSection)
-    const sectionData = [], cuts = []
-    const toc = bodyData[0][0].map(el => ({ el }))
+    // a section for each section in the first body, and one for each
+    // additional body; a long one is cut into parts (see cutSection), so
+    // `cuts` says where each one's parts start and how it was cut
+    const sectionData = [], cuts = [], toc = []
+    const items = bodyData[0][0].map(el => ({ el }))
         .concat(bodyData.slice(1).map(([, body]) => {
             body.classList.add('notesBodyType')
             return { el: body, linear: 'no' }
         }))
-        .map(({ el, linear }) => {
-            const title = normalizeWhitespace(
-                el.querySelector('.title, .subtitle, p')?.textContent
-                ?? (el.classList.contains('title') ? el.textContent : ''))
-            // set up titles for TOC
-            const titles = linear ? [] : Array.from(
-                el.querySelectorAll(':scope > section > .title'),
-                (el, index) => {
-                    el.setAttribute(dataID, index)
-                    return { el, title: getElementText(el), index }
-                })
-            const first = sectionData.length
-            const plan = cutSection(el, sectionLimit)
-            const parts = plan?.parts.map(part => part.el) ?? [el]
-            cuts.push({ first, plan })
-            for (const part of parts) sectionData.push(makeSection(part, linear))
-            const sectionOf = el => first + parts.findIndex(part => part.contains(el))
-            return {
+    for (const { el, linear } of items) {
+        const label = normalizeWhitespace(
+            el.querySelector('.title, .subtitle, p')?.textContent
+            ?? (el.classList.contains('title') ? el.textContent : ''))
+        // set up titles for TOC
+        const titles = linear ? [] : Array.from(
+            el.querySelectorAll(':scope > section > .title'),
+            (el, index) => {
+                el.setAttribute(dataID, index)
+                return { el, title: getElementText(el), index }
+            })
+        const first = sectionData.length
+        const plan = cutSection(el, sectionLimit)
+        const parts = plan?.parts.map(part => part.el) ?? [el]
+        cuts.push({ first, plan })
+        for (const part of parts) sectionData.push(makeSection(part, linear))
+        toc.push({
+            label,
+            href: first.toString(),
+            // each title points at the part that holds it
+            subitems: titles.length ? titles.map(({ el, title, index }) => ({
                 label: title,
-                href: first.toString(),
-                subitems: titles.length ? titles.map(({ el, title, index }) => ({
-                    label: title,
-                    href: `${sectionOf(el)}#${index}`,
-                })) : null,
-            }
+                href: `${first + parts.findIndex(part => part.contains(el))}#${index}`,
+            })) : null,
         })
+    }
 
     // once a section is cut, every section's CFI carries the tag, and an old
     // CFI (from before the cut, or another reader) is moved when resolved
-    const tagged = cuts.some(cut => cut.plan)
+    const tag = cuts.some(cut => cut.plan) ? partsTag(sectionLimit) : null
     const idMap = new Map()
     book.sections = sectionData.map((section, index) => {
         const { ids, load, createDocument, size, linear } = section
         for (const id of ids) if (id) idMap.set(id, index)
-        const cfi = tagged
-            ? CFI.toString([[{ index: 6 }, { index: (index + 1) * 2, id: PARTS_TAG }]])
-            : undefined
+        const cfi = tag ? CFI.toString([taggedSpine(index, tag)]) : undefined
         return { id: index, load, createDocument, size, linear, cfi }
     })
 
     book.toc = toc
 
-    if (tagged) {
-        book.upgradeCFI = cfi => upgradeCFI(cuts, cfi)
+    if (tag) {
+        book.upgradeCFI = cfi => upgradeCFI(cuts, tag, cfi)
         book.resolveCFI = cfi => {
             const parts = CFI.parse(book.upgradeCFI(cfi))
             const index = CFI.fake.toIndex((parts.parent ?? parts).shift())

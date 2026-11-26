@@ -47,7 +47,7 @@ describe('FB2', () => {
   describe('a giant section', () => {
     const paragraph = (i: number) => `<p>${'The harbour bell counted the hours. '.repeat(10)}${i}.</p>`
     const paragraphs = (from: number, to: number) =>
-      Array.from({ length: to - from }, (_, i) => paragraph(from + i)).join('')
+      Array.from({ length: to - from }, (_, i) => paragraph(from + i)).join('\n')
     // one chapter of three ~120k-character subsections, with a footnote
     const giant = new File(
       [
@@ -55,7 +55,7 @@ describe('FB2', () => {
           `<description><title-info><book-title>Giant</book-title></title-info></description>` +
           `<body><section><p>Short opening</p></section>` +
           `<section><title><p>Giant</p></title>` +
-          `<section><title><p>Part A</p></title>${paragraphs(0, 330)}</section>` +
+          `<section><title><p>Part A</p></title>\n${paragraphs(0, 330)}\n</section>\n` +
           `<section><title><p>Part B</p></title>${paragraphs(330, 660)}<p>See <a l:href="#n1" type="note">1</a></p></section>` +
           `<section><title><p>Part C</p></title>${paragraphs(660, 990)}</section>` +
           `</section></body>` +
@@ -97,8 +97,8 @@ describe('FB2', () => {
       const chapter = book.toc[1]
       expect(chapter.label).toBe('Giant')
       expect(chapter.href).toBe('1')
-      expect(chapter.subitems.map((item: { label: string }) => item.label)).toEqual(['Part A', 'Part B', 'Part C'])
-      for (const item of chapter.subitems) {
+      expect(chapter.subitems!.map((item: { label: string }) => item.label)).toEqual(['Part A', 'Part B', 'Part C'])
+      for (const item of chapter.subitems!) {
         const { index, anchor } = book.resolveHref(item.href)
         expect(anchor(book.sections[index].createDocument())?.textContent).toBe(item.label)
       }
@@ -110,6 +110,26 @@ describe('FB2', () => {
       const outer = (i: number) => book.sections[i].createDocument().querySelector('body > section')
       expect(outer(1)?.hasAttribute('data-foliate-continued')).toBe(false)
       expect(outer(2)?.hasAttribute('data-foliate-continued')).toBe(true)
+    })
+
+    it('cuts a long notes body and still finds each note', async () => {
+      const notes = Array.from({ length: 400 }, (_, i) => `<section id="n${i}">${paragraph(i)}</section>`).join('')
+      const book = await fb2.makeFB2(
+        new File(
+          [
+            `<FictionBook xmlns="http://www.gribuser.ru/xml/fictionbook/2.0">` +
+              `<description><title-info><book-title>Notes</book-title></title-info></description>` +
+              `<body><section><p>Text</p></section></body><body name="notes">${notes}</body></FictionBook>`,
+          ],
+          'notes.fb2',
+        ),
+      )
+      expect(book.sections.length).toBeGreaterThan(2)
+      for (const i of [0, 199, 399]) {
+        const { index, anchor } = book.resolveHref(`#n${i}`)
+        expect(book.sections[index].linear).toBe('no')
+        expect(anchor(book.sections[index].createDocument())?.textContent).toContain(`hours. ${i}.`)
+      }
     })
 
     it('leaves a short chapter whole, with its CFIs as they were', async () => {
@@ -171,7 +191,7 @@ describe('FB2', () => {
         range.setEnd(textNodes(doc).find(node => node.textContent!.includes('hours. 510.'))!, 2)
         const cfi = CFI.joinIndir(CFI.fake.fromIndex(1), CFI.fromRange(range))
         const upgraded = book.upgradeCFI(cfi)
-        expect(upgraded).toContain(`[${fb2.PARTS_TAG}]`)
+        expect(upgraded).toContain(`[fb2-parts-${fb2.SECTION_LIMIT}]`)
         expect(book.upgradeCFI(upgraded)).toBe(upgraded)
 
         const docs = new Map<number, Document>()
