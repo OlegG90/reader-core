@@ -21,14 +21,15 @@ beforeAll(async () => {
 
 const sample = (name: string) => new File([readFileSync(resolve(import.meta.dirname, '../samples', name))], name)
 
-const minimalFB2 = (declaration: string, title: string) =>
+/** An FB2 file with the given title and bodies (by default one short section). */
+const fb2File = (title: string, bodies = '<body><section><p>Text</p></section></body>') =>
   new File(
     [
-      `${declaration}<FictionBook xmlns="http://www.gribuser.ru/xml/fictionbook/2.0">` +
+      `<FictionBook xmlns="http://www.gribuser.ru/xml/fictionbook/2.0" xmlns:l="http://www.w3.org/1999/xlink">` +
         `<description><title-info><book-title>${title}</book-title></title-info></description>` +
-        `<body><section><p>Text</p></section></body></FictionBook>`,
+        `${bodies}</FictionBook>`,
     ],
-    'minimal.fb2',
+    `${title}.fb2`,
   )
 
 describe('FB2', () => {
@@ -40,7 +41,7 @@ describe('FB2', () => {
   })
 
   it('reads UTF-8 when there is no XML declaration', async () => {
-    const book = await fb2.makeFB2(minimalFB2('', 'Без декларації'))
+    const book = await fb2.makeFB2(fb2File('Без декларації'))
     expect(book.metadata.title).toBe('Без декларації')
   })
 
@@ -49,31 +50,23 @@ describe('FB2', () => {
     const paragraphs = (from: number, to: number) =>
       Array.from({ length: to - from }, (_, i) => paragraph(from + i)).join('\n')
     // one chapter of three ~120k-character subsections, with a footnote
-    const giant = new File(
-      [
-        `<FictionBook xmlns="http://www.gribuser.ru/xml/fictionbook/2.0" xmlns:l="http://www.w3.org/1999/xlink">` +
-          `<description><title-info><book-title>Giant</book-title></title-info></description>` +
-          `<body><section><p>Short opening</p></section>` +
-          `<section><title><p>Giant</p></title>` +
-          `<section><title><p>Part A</p></title>\n${paragraphs(0, 330)}\n</section>\n` +
-          `<section><title><p>Part B</p></title>${paragraphs(330, 660)}<p>See <a l:href="#n1" type="note">1</a></p></section>` +
-          `<section><title><p>Part C</p></title>${paragraphs(660, 990)}</section>` +
-          `</section></body>` +
-          `<body name="notes"><section id="n1"><p>The note</p></section></body></FictionBook>`,
-      ],
-      'giant.fb2',
+    const giant = fb2File(
+      'Giant',
+      `<body><section><p>Short opening</p></section>` +
+        `<section><title><p>Giant</p></title>` +
+        `<section><title><p>Part A</p></title>\n${paragraphs(0, 330)}\n</section>\n` +
+        `<section><title><p>Part B</p></title>${paragraphs(330, 660)}<p>See <a l:href="#n1" type="note">1</a></p></section>` +
+        `<section><title><p>Part C</p></title>${paragraphs(660, 990)}</section>` +
+        `</section></body>` +
+        `<body name="notes"><section id="n1"><p>The note</p></section></body>`,
     )
     // a chapter whose giant part is three levels down, between short blocks
-    const deep = new File(
-      [
-        `<FictionBook xmlns="http://www.gribuser.ru/xml/fictionbook/2.0">` +
-          `<description><title-info><book-title>Deep</book-title></title-info></description>` +
-          `<body><section><title><p>Deep</p></title><epigraph><p>Before</p></epigraph>` +
-          `<section><title><p>Level 2</p></title><p>Lead</p>` +
-          `<section><title><p>Level 3</p></title>${paragraphs(0, 700)}</section>` +
-          `<p>Tail</p></section><p>Coda</p></section></body></FictionBook>`,
-      ],
-      'deep.fb2',
+    const deep = fb2File(
+      'Deep',
+      `<body><section><title><p>Deep</p></title><epigraph><p>Before</p></epigraph>` +
+        `<section><title><p>Level 2</p></title><p>Lead</p>` +
+        `<section><title><p>Level 3</p></title>${paragraphs(0, 700)}</section>` +
+        `<p>Tail</p></section><p>Coda</p></section></body>`,
     )
     type Section = { createDocument: () => Document; linear?: string }
     const text = (sections: Section[]) => sections.map(s => s.createDocument().body.textContent).join('')
@@ -115,14 +108,7 @@ describe('FB2', () => {
     it('cuts a long notes body and still finds each note', async () => {
       const notes = Array.from({ length: 400 }, (_, i) => `<section id="n${i}">${paragraph(i)}</section>`).join('')
       const book = await fb2.makeFB2(
-        new File(
-          [
-            `<FictionBook xmlns="http://www.gribuser.ru/xml/fictionbook/2.0">` +
-              `<description><title-info><book-title>Notes</book-title></title-info></description>` +
-              `<body><section><p>Text</p></section></body><body name="notes">${notes}</body></FictionBook>`,
-          ],
-          'notes.fb2',
-        ),
+        fb2File('Notes', `<body><section><p>Text</p></section></body><body name="notes">${notes}</body>`),
       )
       expect(book.sections.length).toBeGreaterThan(2)
       for (const i of [0, 199, 399]) {
@@ -133,7 +119,7 @@ describe('FB2', () => {
     })
 
     it('leaves a short chapter whole, with its CFIs as they were', async () => {
-      const book = await fb2.makeFB2(minimalFB2('', 'Short'))
+      const book = await fb2.makeFB2(fb2File('Short'))
       expect(book.sections).toHaveLength(1)
       expect(book.sections[0].cfi).toBeUndefined()
       expect(book.resolveCFI).toBeUndefined()

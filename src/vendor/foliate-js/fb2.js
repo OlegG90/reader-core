@@ -244,7 +244,8 @@ const IMAGE_WEIGHT = 2_000
 const continuedAttr = 'data-foliate-continued'
 // Tags the spine step of every CFI in a book whose sections were cut, so that
 // a CFI saved before they were (it has no tag) can be told apart and moved.
-// The tag names the limit, as another limit would cut the book differently.
+// The tag names the limit, as another limit would cut the book differently:
+// a change of the limit can then tell which cut a tagged CFI was made in.
 const partsTag = limit => `fb2-parts-${limit}`
 
 /** How much a node weighs toward a section's limit: its text, and its images. */
@@ -261,54 +262,72 @@ const taggedSpine = (index, tag) => [{ index: 6 }, { index: (index + 1) * 2, id:
  * are too long themselves. Each part is a shallow copy of `el` holding a run
  * of the original children, so styles keyed on the nesting still apply; only
  * the first part keeps the section's id. Returns null when the section fits,
- * else the parts, each with a note of which children it holds, so that old
- * CFIs can be moved onto them (see moveSteps).
+ * else `[parts, plan, weights]`: the parts, a note of which children each one
+ * holds (no nodes, so it keeps no DOM alive), to move old CFIs onto them (see
+ * moveSteps), and what each part weighs.
  */
-const cutSection = (el, limit) => {
-    if (weigh(el) <= limit) return null
+const cutSection = (el, limit, weight = weigh(el)) => {
+    if (weight <= limit) return null
     // a piece is a child: element number `n` (or `sub`, its part, when it is
     // a nested section that was cut too), or text after element number `after`
-    const groups = [], nested = new Map()
+    const groups = [], weights = [], nested = new Map()
     let group = [], size = 0
-    const flush = () => {
-        if (group.length) groups.push(group)
-        group = [], size = 0
+    const add = (node, piece, weight) => {
+        if (size && piece.n && size + weight > limit) {
+            groups.push(group)
+            weights.push(size)
+            group = [], size = 0
+        }
+        group.push([node, piece])
+        size += weight
     }
     let n = 0
     for (const child of Array.from(el.childNodes)) {
         const weight = weigh(child)
         if (child.nodeType !== 1) {
-            group.push({ node: child, after: n })
-            size += weight
+            add(child, { after: n }, weight)
             continue
         }
         n++
         // a nested section too long itself is cut first; its first part may
         // join the blocks before it, its last part the blocks after it
-        const plan = weight > limit && child.localName === 'section'
-            ? cutSection(child, limit) : null
-        if (plan) nested.set(n, plan)
-        const pieces = plan
-            ? plan.parts.map(({ el }, sub) => ({ node: el, n, sub, weight: weigh(el) }))
-            : [{ node: child, n, sub: 0, weight }]
-        for (const piece of pieces) {
-            if (size && size + piece.weight > limit) flush()
-            group.push(piece)
-            size += piece.weight
+        const cut = weight > limit && child.localName === 'section'
+            ? cutSection(child, limit, weight) : null
+        if (!cut) {
+            add(child, { n, sub: 0 }, weight)
+            continue
         }
+        const [parts, plan, partWeights] = cut
+        nested.set(n, plan)
+        parts.forEach((part, sub) => add(part, { n, sub }, partWeights[sub]))
     }
-    flush()
-    return {
-        nested,
-        parts: groups.map((pieces, i) => {
-            const part = el.cloneNode(false)
-            if (i) {
-                part.removeAttribute('id')
-                part.setAttribute(continuedAttr, '')
-            }
-            part.append(...pieces.map(piece => piece.node))
-            return { el: part, pieces }
-        }),
+    groups.push(group)
+    weights.push(size)
+    const parts = groups.map((group, i) => {
+        const part = el.cloneNode(false)
+        if (i) {
+            part.removeAttribute('id')
+            part.setAttribute(continuedAttr, '')
+        }
+        part.append(...group.map(([node]) => node))
+        return part
+    })
+    const plan = { nested, parts: groups.map(group => group.map(([, piece]) => piece)) }
+    return [parts, plan, weights]
+}
+
+/**
+ * Finds the first piece in a cut section's plan that `match` accepts: the
+ * number of its part and how many elements come before it in that part, with
+ * itself. Undefined if none does.
+ */
+const locate = (plan, match) => {
+    for (const [i, pieces] of plan.parts.entries()) {
+        let elements = 0
+        for (const piece of pieces) {
+            if (piece.n) elements++
+            if (match(piece)) return [i, elements]
+        }
     }
 }
 
@@ -324,14 +343,8 @@ const moveSteps = (plan, steps) => {
     // element number (index - 1) / 2 (0: before the first element)
     if (step.index % 2) {
         const after = (step.index - 1) / 2
-        for (const [i, { pieces }] of plan.parts.entries()) {
-            let elements = 0
-            for (const piece of pieces) {
-                if (piece.n) elements++
-                else if (piece.after === after)
-                    return [i, [{ ...step, index: elements * 2 + 1 }]]
-            }
-        }
+        const found = locate(plan, piece => piece.after === after)
+        if (found) return [found[0], [{ ...step, index: found[1] * 2 + 1 }]]
         // no text there (a CFI may name an empty gap): take the element
         return moveSteps(plan, [{ index: Math.max(after, 1) * 2 }])
     }
@@ -342,16 +355,8 @@ const moveSteps = (plan, steps) => {
         if (!moved) return null
         ;[sub, inner] = moved
     }
-    for (const [i, { pieces }] of plan.parts.entries()) {
-        let elements = 0
-        for (const piece of pieces) {
-            if (!piece.n) continue
-            elements++
-            if (piece.n === n && piece.sub === sub)
-                return [i, [{ ...step, index: elements * 2 }, ...inner]]
-        }
-    }
-    return null
+    const found = locate(plan, piece => piece.n === n && piece.sub === sub)
+    return found ? [found[0], [{ ...step, index: found[1] * 2 }, ...inner]] : null
 }
 
 /**
@@ -475,17 +480,21 @@ export const makeFB2 = async (blob, { sectionLimit = SECTION_LIMIT } = {}) => {
                 return { el, title: getElementText(el), index }
             })
         const first = sectionData.length
-        const plan = cutSection(el, sectionLimit)
-        const parts = plan?.parts.map(part => part.el) ?? [el]
+        const [parts, plan] = cutSection(el, sectionLimit) ?? [[el], null]
         cuts.push({ first, plan })
         for (const part of parts) sectionData.push(makeSection(part, linear))
+        const partOf = new Map(parts.map((part, i) => [part, first + i]))
+        const sectionOf = el => {
+            while (!partOf.has(el)) el = el.parentNode
+            return partOf.get(el)
+        }
         toc.push({
             label,
             href: first.toString(),
             // each title points at the part that holds it
             subitems: titles.length ? titles.map(({ el, title, index }) => ({
                 label: title,
-                href: `${first + parts.findIndex(part => part.contains(el))}#${index}`,
+                href: `${sectionOf(el)}#${index}`,
             })) : null,
         })
     }
