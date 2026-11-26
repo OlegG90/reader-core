@@ -129,7 +129,7 @@ const toInnerString = parsed => parsed.parent
     ? [parsed.parent, parsed.start, parsed.end].map(toInnerString).join(',')
     : parsed.map(parts => parts.map(partToString).join('')).join('!')
 
-const toString = parsed => wrap(toInnerString(parsed))
+export const toString = parsed => wrap(toInnerString(parsed))
 
 export const collapse = (x, toEnd) => typeof x === 'string'
     ? toString(collapse(parse(x), toEnd))
