@@ -35,6 +35,9 @@ tag, still resolves (`view.goTo`), and `book.upgradeCFI(cfi)` rewrites it, so an
 (bookmarks, positions) once. A reader-core older than 0.4.0 reads a tagged CFI as the wrong section, so bump
 every app that shares positions together.
 
+`bookView.setSwipe(false)` (from 0.4.1) stops sideways swipes from turning pages, for an app that lets the
+reader turn them off; taps, keys and the wheel still turn pages.
+
 A change here is a new tag, then a bump in each app.
 
 ## Develop

@@ -139,6 +139,8 @@ export class BookView {
   #justClosedPanel = false
   /** Where the current touch on the page began; touches are read as taps (see touch.ts). */
   #touchStart: Touch | null = null
+  /** Whether a finger's sideways swipe turns pages (foliate-js's own gesture). */
+  #swipe = true
   /** The last press was a finger: the click the browser adds after a tap is then ignored. */
   #lastPressWasTouch = false
 
@@ -231,6 +233,20 @@ export class BookView {
     return this.flow === 'scrolled' ? LINE_PX : undefined
   }
 
+  /** Turns page-turning swipes on or off; taps, keys and the wheel turn pages either way. */
+  setSwipe(on: boolean) {
+    this.#swipe = on
+  }
+
+  /**
+   * Holds a finger's moves back from foliate-js's page swipe while swipes are
+   * off: caught on the way down (capture), they never reach its listeners, so
+   * the page stays put and the finger's lift snaps back to it.
+   */
+  #guardSwipe(target: HTMLElement | Document) {
+    target.addEventListener('touchmove', e => !this.#swipe && e.stopImmediatePropagation(), { capture: true })
+  }
+
   /** Restyles the book, keeping the reading position. An open note would keep the old style, so it closes. */
   setStyle({ css, lineWidth }: BookStyle) {
     this.hideFootnote()
@@ -288,6 +304,7 @@ export class BookView {
     })
     // The page margins lie outside the book's iframes.
     view.addEventListener('wheel', e => this.#onWheel(e), { passive: true })
+    this.#guardSwipe(view)
     this.#attachPresses(view, e => ({ x: e.clientX, y: e.clientY }))
     view.addEventListener('click', e => {
       if (this.#lastPressWasTouch || this.#consumePanelClose()) return
@@ -415,6 +432,7 @@ export class BookView {
     }
     doc.addEventListener('keydown', ev => this.events.key(ev))
     doc.addEventListener('wheel', ev => this.#onWheel(ev), { passive: true })
+    this.#guardSwipe(doc)
     // Mouse only: a tap's emulated mouse events would hide the menu it just showed.
     doc.addEventListener('pointermove', ev => ev.pointerType === 'mouse' && this.events.pointer(toWindow(ev).y))
     // A press on a link follows it, and one that ends a selection keeps it.
